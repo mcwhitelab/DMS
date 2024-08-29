@@ -1,0 +1,856 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(cowplot)
+
+library(igraph)
+library(tidygraph)
+library(ggraph)
+
+```
+
+```{r}
+#Annotation files
+
+
+mave_paper <- readxl::read_xlsx("1-s2.0-S0002929721001932-mmc3.xlsx", sheet = 4, skip = 2)
+
+
+#https://www.sciencedirect.com/science/article/pii/S0002929721001932#mmc3
+mave_paper_annot <-mave_paper  %>% select(pos = position, wt, mut, fol_response = `folate response`, base_response = `base functionality`) %>% #, folate_dep  = `folate dependent` ) %>%
+  mutate(mutation = paste0(wt,pos,mut))
+dmask <- read_tsv("/scratch/gpfs/cmcwhite/mthfr_human_demask.txt") %>%
+  rename(demask_score = score)
+
+
+dmask_group <- dmask %>%
+  group_by(pos) %>%
+     summarize(maxeffect = min(demask_score), max_entropy = max(entropy)) %>%
+  ungroup %>%
+  mutate(pos = as.character(pos))
+annot_tbl <-
+  tibble(name = c('321', '255', '197', '127', '228', '149', '254', '158', '227', '63', '157', '256', '257', '253', '129'),
+         effect = c("substrate", "loss", "FAD", "loss", "substrate", "loss", "loss", "reduction", "reduction", 'active site', 'reduction', 'loss', 'loss', 'reduction', 'reduction'))
+
+annot_tbl <- annot_tbl %>% mutate(has_func = "TRUE")
+
+
+uniprot_disease <- 
+  read_tsv("/scratch/gpfs/cmcwhite/MTHFR_annot_uniprot.txt", col_names = c("VAR", 'pos', 'change', 'desc')) %>%
+  mutate(pos = as.character(pos)) %>%
+  select(pos) %>%
+  mutate(disease = TRUE) %>%
+  unique()
+
+
+theme_set(theme_cowplot())
+```
+
+
+
+
+
+
+```{r}
+read_csv_dms <- function(filename){
+  
+  df <- read_csv(filename)
+  df$filename <- filename
+  return(df)
+}
+
+
+```
+
+
+
+```{r}
+directory <- "/scratch/gpfs/cmcwhite/preds_alphafold/interaction_exp/fastas/"
+filelist <- c("5ht1b_50U_gnao.fasta.attn_compare.bfd.gpu.csv","5ht1b.fasta.attn_compare.t5.gpu.csv",
+"myc_50U_max.fasta.attn_compare.t5.gpu.csv",  "myc.fasta.attn_compare.t5.gpu.csv", "5ht1b.fasta.attn_compare.bfd.gpu.csv","myc_50U_max.fasta.attn_compare.bfd.gpu.csv", "myc.fasta.attn_compare.bfd.gpu.csv")
+
+dms_int <- map_dfr(filelist, ~read_csv_dms(paste0(directory, .)), .id = "segment") %>%
+  #select(-proteinID) %>%
+  #mutate(model= "t5") %>%
+  mutate(mutation = paste0(mutation,  "_", segment)) %>%
+  select(-segment)  %>%
+  mutate(filename = str_extract(filename, "([^\\/]+)$")) %>% # Get just the filename, not the path
+  mutate(model = str_extract(filename, "bfd|t5"))%>% select(-filename)
+
+
+dms_int  %>% select(proteinID, model) %>% unique
+
+  
+dms_preprocess_int<- dms_int %>%
+
+  
+ pivot_longer(-c(mutation, model, proteinID), names_to = "head", values_to = "value") %>%
+
+  group_by(head, model, proteinID) %>%
+     mutate(meanval = mean(value), sd = sd(value)) %>%
+    ungroup() %>%
+  filter(value != 0) %>%
+  mutate(zscore = (value - meanval)/sd) %>%
+  arrange(zscore)
+
+
+dms_preprocess_int %>% 
+  mutate(pos = str_extract(mutation, "\\d+"))
+
+
+ pos_zscores_int <- dms_preprocess_int%>%
+    mutate(pos = str_extract(mutation, "\\d+")) %>%
+  group_by(pos, head, model, proteinID) %>%
+     summarize(pos_z= mean(zscore)) %>%
+  ungroup %>%
+  arrange(pos_z) %>%
+   mutate(refprot = str_extract(proteinID, "^[^_]+"))
+
+
+
+pos_zscores_int  %>% filter(refprot == "myc") %>% filter(model == "bfd") %>% 
+  group_by(head, pos, model, refprot) %>%
+  pivot_wider(values_from = "pos_z", names_from = "proteinID") 
+ 
+```
+
+
+
+```{r}
+
+
+directory <- "/scratch/gpfs/cmcwhite/preds_alphafold/ramundo_exp/fastas_ramundo/"
+
+filelist <- c("VIPP1notransit_50U_CPLD42.fasta.attn_compare.bfd.gpu.csv",
+              "VIPP1notransit_50U_CPLD42.fasta.attn_compare.t5.gpu.csv", 
+              "VIPP1notransit.fasta.attn_compare.bfd.gpu.csv",
+              "VIPP1notransit.fasta.attn_compare.t5.gpu.csv",
+              "CPLD42.fasta.attn_compare.bfd.gpu.csv", 
+              "CPLD42.fasta.attn_compare.t5.gpu.csv")
+              
+              # dir(directory, pattern = "saga3.*gpu.csv")
+
+
+dms_vipp <- map_dfr(filelist, ~read_csv_dms(paste0(directory, .)), .id = "segment") %>%
+  #select(-proteinID) %>%
+  #mutate(model= "t5") %>%
+  mutate(mutation = paste0(mutation,  "_", segment)) %>%
+  select(-segment) %>%
+  separate(filename, into = c(NA, NA, NA, NA, NA, NA, NA, "filename"), sep = "[/]" ) %>% 
+  separate(filename, into = c(NA, NA, NA, "model", NA, NA), sep = "[.]") 
+
+dms_preprocess_vipp<- dms_vipp %>% 
+
+  
+ pivot_longer(-c(mutation, model, proteinID), names_to = "head", values_to = "value") %>%
+
+  group_by(head, model, proteinID) %>%
+     mutate(meanval = mean(value), sd = sd(value)) %>%
+    ungroup() %>%
+  filter(value != 0) %>%
+  mutate(zscore = (value - meanval)/sd) %>%
+  
+  arrange(zscore)
+
+
+
+# %>%
+  #  mutate(pos = str_extract(mutation, "\\d+"))
+
+
+
+
+# Too slow
+ pos_zscores_vipp <- dms_preprocess_vipp%>%
+  separate(mutation, into = c("mutation", "segment"), sep = "_") %>%
+  
+  mutate(pos = str_extract(mutation, "\\d+")) %>%
+  mutate(pos = paste0(pos, "_", segment)) %>%
+   select(-segment) %>%
+  # filter(!(segment == 2 & pos == 1))
+  group_by(pos, head, model, proteinID) %>%
+     summarize(pos_z= mean(zscore)) %>%
+  ungroup %>%
+  arrange(pos_z)
+
+ pos_zscores_vipp %>%
+  #filter(grepl("^[0-9]_", pos)) %>% 
+   filter(pos != "1_1") %>%
+   filter(pos != "1_2") %>% 
+   filter(pos != "1_3") %>%
+   filter(pos != "1_4") %>%
+    #filter(grepl("raxx", proteinID))%>%
+   group_by(pos, proteinID) %>%
+      summarize(tot = sum(pos_z)) %>%
+    arrange(tot)
+  #filter(pos_z <= -2) %>% 
+  #pull(head) %>% unique
+ 
+ 
+vipp_heads <- pos_zscores_vipp %>%
+  filter(grepl("^[0-9]_", pos)) %>% 
+  filter(pos != "1_1") %>% 
+  filter(pos != "1_2") %>%
+     filter(pos != "1_3") %>%
+   filter(pos != "1_4") %>%
+
+  filter(pos_z <= -2) %>% View()
+  pull(head) %>% unique
+ 
+ 
+pos_zscores_vipp_net <- pos_zscores_vipp%>%
+  filter(pos_z <= -6) %>%
+  filter(proteinID == "VIPP1_CPLD42") %>%
+  filter(model == "t5") %>%
+  #filter(head %in% raxx_heads) %>%
+  filter(pos != "1_1") %>%
+    filter(pos != "1_2") %>%
+     filter(pos != "1_3") %>%
+   filter(pos != "1_4") %>%
+     filter(pos != "1_5") %>%
+  group_by(head, model, proteinID) %>%
+     mutate(n = n()) %>%
+  ungroup %>% 
+  filter(n > 1) %>%
+  #filter(model == "t5") %>%
+  #filter(grepl("RLK", proteinID)) %>%
+  mutate(abs_z = -pos_z) %>%
+  #  filter(grepl("^[23][0-9][0-9]", pos)) %>%
+  as_tbl_graph() %>%
+  activate(nodes) %>%
+    # mutate(deg = centrality_degree()) %>%
+     mutate(is_head = case_when(grepl("-", name) ~ TRUE,
+                                 TRUE ~ FALSE)
+           ) %>%
+      mutate(label = case_when(is_head == TRUE ~ "",
+                               is_head == FALSE ~ name))
+
+
+
+pos_zscores_vipp_net  %>%
+
+  ggraph("fr") +
+    geom_edge_link(alpha = 1, aes(color = abs_z)) +
+  geom_node_text(aes(label = label))+    #, size = -maxeffect)) + #, size = -max_entropy))  +
+  scale_edge_color_gradient(low= "grey90", high = "red") +
+  facet_wrap(model ~ proteinID)
+  #scale_size_continuous(range = c(2,5)) +
+ # scale_color_manual(values = c("blue", "red", "orange", "purple", "lightblue1"), na.value = "black")
+
+
+dms_preprocess_vipp  %>% 
+  filter(proteinID == "CPLD42") %>%
+  filter(grepl("[A-Z]6[234]", mutation)) %>% mutate(x = str_extract(mutation, "^...")) %>% pull(x)  %>% unique()
+
+dms_preprocess_vipp  %>% 
+  filter(proteinID == "CPLD42") %>%
+  filter(grepl("[A-Z]20[345]", mutation)) %>% mutate(x = str_extract(mutation, "^....")) %>% pull(x)  %>% unique()
+
+dms_preprocess_vipp  %>% 
+  filter(proteinID == "CPLD42") %>%
+  filter(grepl("[A-Z]21[567]", mutation)) %>% mutate(x = str_extract(mutation, "^....")) %>% pull(x)  %>% unique()
+
+
+
+
+# 88 154 145
+dms_preprocess_vipp  %>% filter(grepl("[A-Z]8[789]", mutation)) %>% mutate(x = str_extract(mutation, "^...")) %>% pull(x)  %>% unique()
+dms_preprocess_vipp  %>% filter(grepl("14[456]", mutation)) %>% mutate(x = str_extract(mutation, "^....")) %>% pull(x)  %>% unique()
+dms_preprocess_vipp  %>% filter(grepl("VIPP", proteinID)) %>% filter(grepl("14[789]", mutation)) %>% mutate(x = str_extract(mutation, "^....")) %>% pull(x)  %>% unique()
+dms_preprocess_vipp  %>% filter(grepl("15[345]", mutation)) %>% mutate(x = str_extract(mutation, "^....")) %>% pull(x)  %>% unique()
+
+dms_preprocess_vipp  %>% filter(grepl("[A-Z]7[678]", mutation)) %>% mutate(x = str_extract(mutation, "^...")) %>% pull(x)  %>% unique()
+dms_preprocess_vipp  %>% filter(grepl("580", mutation)) %>% mutate(x = str_extract(mutation, "^....")) %>% pull(x)  %>% unique()
+dms_preprocess_vipp  %>% filter(grepl("15[345]", mutation)) %>% mutate(x = str_extract(mutation, "^....")) %>% pull(x)  %>% unique()
+
+
+dms_preprocess_vipp  %>% filter(grepl("51[456]", mutation)) %>% mutate(x = str_extract(mutation, "^....")) %>% pull(x)  %>% unique()
+
+
+dms_preprocess_vipp  %>% filter(grepl("[A-Z]4[123][A-Z]", mutation)) %>% mutate(x = str_extract(mutation, "^...")) %>% pull(x)  %>% unique()
+```
+
+
+
+
+
+```{r}
+directory <- "/scratch/gpfs/cmcwhite/preds_alphafold/ronald_prots/fastas/"
+
+filelist <- c("raxx_A2_xa21_extracelluler_linked.fasta.attn_compare.bfd.gpu.csv",
+              #"raxx_A2_xa21_extracelluler_linked.fasta.attn_compare.t5.gpu.csv", 
+              #"ida_rlk5_extracellular_linked.fasta.attn_compare.t5.gpu.csv")
+              "ida_rlk5_extracellular_linked.fasta.attn_compare.bfd.gpu.csv" )
+              
+              # dir(directory, pattern = "saga3.*gpu.csv")
+
+
+dms_raxx <- map_dfr(filelist, ~read_csv(paste0(directory, .)), .id = "segment") %>%
+  #select(-proteinID) %>%
+  mutate(model= "t5") %>%
+  mutate(mutation = paste0(mutation,  "_", segment)) %>%
+  select(-segment)
+
+dms_preprocess_raxx<- dms_raxx %>% 
+
+  
+ pivot_longer(-c(mutation, model, proteinID), names_to = "head", values_to = "value") %>%
+
+  group_by(head, model, proteinID) %>%
+     mutate(meanval = mean(value), sd = sd(value)) %>%
+    ungroup() %>%
+  filter(value != 0) %>%
+  mutate(zscore = (value - meanval)/sd) %>%
+  
+  arrange(zscore)
+
+
+
+# %>%
+  #  mutate(pos = str_extract(mutation, "\\d+"))
+
+
+dms_preprocess_raxx %>% head(1000 ) %>% View
+
+
+
+
+# Too slow
+ pos_zscores_raxx <- dms_preprocess_raxx %>%
+  separate(mutation, into = c("mutation", "segment"), sep = "_") %>%
+  
+  mutate(pos = str_extract(mutation, "\\d+")) %>%
+  mutate(pos = paste0(pos, "_", segment)) %>%
+   select(-segment) %>%
+  # filter(!(segment == 2 & pos == 1))
+  group_by(pos, head, model, proteinID) %>%
+     summarize(pos_z= mean(zscore)) %>%
+  ungroup %>%
+  arrange(pos_z)
+
+ pos_zscores_raxx %>%
+  filter(grepl("^[0-9]_", pos)) %>% filter(pos != "1_1") %>% filter(pos != "1_2") %>%
+    filter(grepl("raxx", proteinID))%>%
+   group_by(pos) %>%
+      summarize(tot = sum(pos_z)) %>%
+    arrange(tot)
+  #filter(pos_z <= -2) %>% 
+  #pull(head) %>% unique
+ 
+ 
+raxx_heads <- pos_zscores_raxx %>%
+  filter(grepl("^[0-9]_", pos)) %>% filter(pos != "1_1") %>% filter(pos != "1_2") %>%
+    filter(grepl("RLK", proteinID)) %>%
+  filter(pos_z <= -2) %>% View()
+  pull(head) %>% unique
+ 
+ 
+pos_zscores_raxx_net <- pos_zscores_raxx%>%
+  filter(pos_z <= -5) %>%
+  
+  #filter(head %in% raxx_heads) %>%
+  filter(pos != "1_1") %>%
+  group_by(head, model, proteinID) %>%
+     mutate(n = n()) %>%
+  ungroup %>% 
+  filter(n > 1) %>%
+  #filter(model == "t5") %>%
+  filter(grepl("RLK", proteinID)) %>%
+  mutate(abs_z = -pos_z) %>%
+  #  filter(grepl("^[23][0-9][0-9]", pos)) %>%
+  as_tbl_graph() %>%
+  activate(nodes) %>%
+    # mutate(deg = centrality_degree()) %>%
+     mutate(is_head = case_when(grepl("-", name) ~ TRUE,
+                                 TRUE ~ FALSE)
+           ) %>%
+      mutate(label = case_when(is_head == TRUE ~ "",
+                               is_head == FALSE ~ name))
+
+
+
+pos_zscores_raxx_net  %>%
+
+  ggraph("fr") +
+    geom_edge_link(alpha = 1, aes(color = abs_z)) +
+  geom_node_text(aes(label = label))+    #, size = -maxeffect)) + #, size = -max_entropy))  +
+  scale_edge_color_gradient(low= "grey90", high = "red") +
+  facet_wrap(~model)
+  #scale_size_continuous(range = c(2,5)) +
+ # scale_color_manual(values = c("blue", "red", "orange", "purple", "lightblue1"), na.value = "black")
+
+```
+
+
+
+
+```{r}
+directory <- "/scratch/gpfs/cmcwhite/preds_alphafold/chlamy/exp_fastas/"
+
+filelist <- c("saga3_0_400.fasta.attn_compare.bertbfd.gpu.csv",
+              "saga3_400_800.fasta.attn_compare.bertbfd.gpu.csv",
+              "saga3_800_1200.fasta.attn_compare.bertbfd.gpu.csv")
+              
+              # dir(directory, pattern = "saga3.*gpu.csv")
+
+
+dms_saga3 <- map_dfr(filelist, ~read_csv(paste0(directory, .)), .id = "segment") %>%
+  select(-proteinID) %>%
+  mutate(model= "bfd") %>%
+  mutate(mutation = paste0(mutation,  "_", segment)) %>%
+  select(-segment)
+
+dms_preprocess_saga3 <- dms_saga3 %>%
+
+  
+ pivot_longer(-c(mutation, model), names_to = "head", values_to = "value") %>%
+
+  group_by(head, model) %>%
+     mutate(meanval = mean(value), sd = sd(value)) %>%
+    ungroup() %>%
+  filter(value != 0) %>%
+  mutate(zscore = (value - meanval)/sd) %>%
+  
+  arrange(zscore)
+
+# %>%
+  #  mutate(pos = str_extract(mutation, "\\d+"))
+
+
+ pos_zscores_saga3 <- dms_preprocess_saga3 %>%
+  separate(mutation, into = c("mutation", "segment"), sep = "_") %>%
+  
+  mutate(pos = str_extract(mutation, "\\d+")) %>%
+  mutate(pos = paste0(pos, "_", segment)) %>%
+   select(-segment) %>%
+  # filter(!(segment == 2 & pos == 1))
+  group_by(pos, head, model) %>%
+     summarize(pos_z= mean(zscore)) %>%
+  ungroup %>%
+  arrange(pos_z)
+
+
+pos_zscores_saga3_net <- pos_zscores_saga3%>%
+  filter(pos_z <= -4) %>%
+  group_by(head, model) %>%
+     mutate(n = n()) %>%
+  ungroup %>% 
+  filter(n > 1) %>%
+  filter(model == "bfd") %>%
+  mutate(abs_z = -pos_z) %>%
+    filter(grepl("^[23][0-9][0-9]", pos)) %>%
+  as_tbl_graph() %>%
+  activate(nodes) %>%
+    # mutate(deg = centrality_degree()) %>%
+     mutate(is_head = case_when(grepl("-", name) ~ TRUE,
+                                 TRUE ~ FALSE)
+           ) %>%
+      mutate(label = case_when(is_head == TRUE ~ "",
+                               is_head == FALSE ~ name))
+
+
+
+pos_zscores_saga3_net  %>%
+
+  ggraph("fr") +
+    geom_edge_link(alpha = 1, aes(color = abs_z)) +
+  geom_node_text(aes(label = label))+    #, size = -maxeffect)) + #, size = -max_entropy))  +
+  scale_edge_color_gradient(low= "grey90", high = "red") +
+  facet_wrap(~model)
+  #scale_size_continuous(range = c(2,5)) +
+ # scale_color_manual(values = c("blue", "red", "orange", "purple", "lightblue1"), na.value = "black")
+
+```
+
+
+```{r}
+
+dms_t5 <- read_csv("/scratch/gpfs/cmcwhite/MTHR_HUMAN.attn_compare.t5xl.gpu.csv")  %>% select(-proteinID)
+
+dms_bfd <- read_csv("/scratch/gpfs/cmcwhite/MTHR_HUMAN.attn_compare.bertbfd.gpu.csv")  %>% select(-proteinID)
+
+
+dms_bfd_opl2 <- read_csv("/scratch/gpfs/cmcwhite/preds_alphafold/wallner_sophie_disordered/fastas/opl2.fasta.attn_compare.bertbfd.gpu.csv") %>% select(-proteinID) %>%mutate(model= "bfd")
+
+dms_t5_opl2 <- read_csv("/scratch/gpfs/cmcwhite/preds_alphafold/wallner_sophie_disordered/fastas/opl2.fasta.attn_compare.t5xl.gpu.csv")%>% select(-proteinID) %>%mutate(model= "t5")
+
+dms_opl2 <- bind_rows(dms_bfd_opl2,dms_t5_opl2)
+
+dms_preprocess_opl2 <- dms_opl2 %>%
+  
+ pivot_longer(-c(mutation, model), names_to = "head", values_to = "value") %>%
+
+  group_by(head, model) %>%
+     mutate(meanval = mean(value), sd = sd(value)) %>%
+    ungroup() %>%
+  filter(value != 0) %>%
+  mutate(zscore = (value - meanval)/sd) %>%
+  
+  arrange(zscore) %>%
+    mutate(pos = str_extract(mutation, "\\d+"))
+
+
+ pos_zscores_opl2 <- dms_preprocess_opl2 %>%
+  group_by(pos, head, model) %>%
+     summarize(pos_z= mean(zscore)) %>%
+  ungroup %>%
+  arrange(pos_z)
+
+
+pos_zscores_opl2_net <- pos_zscores_opl2%>%
+  filter(pos_z <= -6) %>%
+  group_by(head, model) %>%
+     mutate(n = n()) %>%
+  ungroup %>% 
+  filter(n > 1) %>%
+  filter(model == "bfd") %>%
+  mutate(abs_z = -pos_z) %>%
+  as_tbl_graph() %>%
+  activate(nodes) %>%
+    # mutate(deg = centrality_degree()) %>%
+     mutate(is_head = case_when(grepl("-", name) ~ TRUE,
+                                 TRUE ~ FALSE)
+           ) %>%
+      mutate(label = case_when(is_head == TRUE ~ "",
+                               is_head == FALSE ~ name))
+
+
+#93
+#342
+#457
+#522
+#560
+
+pos_zscores_opl2_net  %>%
+  ggraph("fr") +
+    geom_edge_link(alpha = 1, aes(color = abs_z)) +
+  geom_node_text(aes(label = label))+    #, size = -maxeffect)) + #, size = -max_entropy))  +
+  scale_edge_color_gradient(low= "grey90", high = "red") +
+  facet_wrap(~model)
+  #scale_size_continuous(range = c(2,5)) +
+ # scale_color_manual(values = c("blue", "red", "orange", "purple", "lightblue1"), na.value = "black")
+```
+
+```{r}
+
+dms_preprocess_t5 <- dms_t5 %>%
+  pivot_longer(-mutation, names_to = "head", values_to = "value") %>%
+
+  group_by(head) %>%
+     mutate(meanval = mean(value), sd = sd(value)) %>%
+  ungroup() %>%
+  filter(value != 0) %>%
+  mutate(zscore = (value - meanval)/sd) %>%
+  
+  arrange(zscore) %>%
+    mutate(pos = str_extract(mutation, "\\d+"))
+
+
+
+
+```
+
+```{r}
+
+pos_zscores_bfd <- dms_preprocess_bfd %>%
+  group_by(pos, head) %>%
+     summarize(pos_z= mean(zscore)) %>%
+  ungroup %>%
+  arrange(pos_z)
+
+pos_zscores_bfd <- dms_preprocess_bfd %>%
+  group_by(pos, head) %>%
+     summarize(pos_z= mean(zscore)) %>%
+  ungroup %>%
+  arrange(pos_z)
+
+
+
+
+```
+
+```{r}
+pos_zscores_bfd_net <- pos_zscores_bfd %>%
+  filter(pos_z <= -10) %>%
+  group_by(head) %>%
+     mutate(n = n()) %>%
+  ungroup %>%
+  filter(n > 1) %>%
+  mutate(abs_z = -pos_z) %>%
+  as_tbl_graph() %>%
+  activate(nodes) %>%
+    # mutate(deg = centrality_degree()) %>%
+     mutate(is_head = case_when(grepl("-", name) ~ TRUE,
+                                 TRUE ~ FALSE)
+           ) %>%
+      mutate(label = case_when(is_head == TRUE ~ "",
+                               is_head == FALSE ~ name))  
+  
+
+
+pos_zscores_bfd_net %>%
+  activate("nodes") %>%
+  left_join(dmask_group, by = c("name" = "pos")) %>%
+  left_join(annot_tbl) %>%
+  mutate(max_entropy = case_when(is.na(max_entropy) ~ 0,
+                   TRUE ~ max_entropy)) %>%
+    mutate(maxeffect = case_when(is.na(maxeffect) ~ 0,
+                   TRUE ~ maxeffect)) %>%
+  left_join(uniprot_disease, by = c("name" = "pos")) %>% #as_tibble %>% View
+  mutate(annot = case_when(disease == TRUE ~ "disease",
+                     !is.na(effect) ~ "binding")) %>%
+  ggraph("fr") +
+    geom_edge_link(alpha = 0.1) + #, aes(width = abs_z)) +
+  geom_node_text(aes(label = label, color = annot)) +   #, size = -maxeffect)) + #, size = -max_entropy))  +
+  #scale_size_continuous(range = c(2,5)) +
+  scale_color_manual(values = c("blue", "red", "orange", "purple", "lightblue1"), na.value = "black")
+
+
+```
+
+```{r}
+
+plot_t5_11 <- pos_zscores_t5 %>%
+  filter(pos_z <= -5) %>%
+  as_tbl_graph() %>%
+  activate(nodes) %>%
+     mutate(is_head = case_when(grepl("-", name) ~ FALSE,
+                                 TRUE ~ TRUE)
+           ) %>%
+      mutate(label = case_when(is_head == FALSE ~ "",
+                               is_head == TRUE ~ name)) %>%
+  left_join(annot_tbl) %>%
+  ggraph("fr") +
+    geom_edge_link(alpha = 0.1) +
+  geom_node_text(aes(label = label, color = effect, size = is_head))  +
+  scale_size_manual(values = c(3,3.5)) +
+  scale_color_manual(values = c("blue", "red", "orange"), na.value = "black")
+plot_t5_11
+  #geom_node_point()
+  #activate("edges") %>%
+  #  mutate(x = "x")
+  
+  
+
+
+```
+
+
+```{r}
+add_an_order <- function(df_clusteron, df_addorder, name, distmethod, hclustmethod){
+    
+    #ids <- rownames(df_clusteron)
+    #df_elut_forclust <- data.frame(sapply(df_clusteron, function(x) as.numeric(as.character(x))))
+    hr <- hclust(as.dist(1-cor(t(df_clusteron), method=distmethod)), method=hclustmethod)
+    #df_clust <- df_addorder[rev(hr$labels[hr$order]),]
+    order <- data.frame(hr$labels[hr$order])
+    order$ordering <- rownames(order)
+    names(order) <- c("mutation", name)
+    return(order)
+    }
+
+# Convert to data.frame object
+df_elut_forclust <- data.frame(dms)
+
+# Set rownames as the $mutation column
+rownames(df_elut_forclust) <- df_elut_forclust$mutation
+
+# Remove mutation column so all values are data
+df_elut_forclust$mutation <- NULL
+
+# Convert data to matrix
+mat_elut_forclust <- data.matrix(df_elut_forclust, rownames.force = TRUE)
+
+# Fill in missing values with zero
+mat_elut_forclust[is.na(mat_elut_forclust)] <- 0 
+
+# Do a clustering
+# This takes a long time. At least 5 minutes, but will run
+df_order_pearson_average <- add_an_order(mat_elut_forclust, mat_elut_forclust, "order_pearson_average", "pearson", "average")
+
+# This will sort the data into the row order from the hierarchical clustering
+wide_ordered <- dms %>% left_join(df_order_pearson_average, by = "mutation") %>% 
+     arrange(order_pearson_average) %>% 
+     mutate(mutation = fct_inorder(mutation)) %>%
+     select(-order_pearson_average)
+
+
+```
+
+```{r}
+wide_tidy <- wide_ordered %>% pivot_longer(names_to = "layer_head", values_to = "score", -mutation ) #gather(layer_head, value, -mutation)
+
+library(cowplot)
+alldata_plot <-  wide_tidy %>%
+     ggplot(aes( x = fct_inorder(layer_head), y = fct_rev(mutation) , fill = score)) + 
+     geom_tile() +
+  
+     scale_fill_gradient(low = "#ffff66", high = "blue") + 
+     #theme(axis.text.x = element_text(angle = 45, vjust=1, hjust  =1))
+     theme_nothing()
+
+mutations <- c("R46Q", "R46W", "R51P", "R52Q", "W59S", "R68G", "R82W", "A113T", "H127Y", "T129N", "C130R", "Q147P", "G149V", "I153M", "R157Q", "A175T", "R183Q", "A195V", "G196D", "V218L", "I225L", "T227M", "P251L", "V253F", "P254S", "G255V", "I256N", "F257V", "L323P", "N324S", "R325C", "R335C", "R335H", "M338T", "W339G", "P348S", "H354Y", "R357C", "R363H", "K372E", "R377C", "R377H", "G387D", "W421S", "F435S", "Y506D", "V536F", "P572L", "V574G", "V575G", "E586K", "L598P", "L628P")
+
+alldata_plot
+alldata_plot  %>% ggsave("figures/alldata_plot.png", .,  device = "png", height = 6, width = 4, units = "in")
+
+```
+
+```{r}
+
+sam_table <- 
+  tibble(pos= c(461,462,463,463, 481, 482, 483, 484, 485, 560, 573)) %>%
+  mutate(desc = "SAM")
+
+substrate_table <- tibble(pos = c(159, 228, 321, 325)) %>%
+  mutate(desc = "substrate")
+
+
+fad_table <- tibble(pos = c(157,158,159,174,175, 201, 202,203, 204, 127, 197, 210, 217)) %>%
+  mutate(desc = "fad")
+
+annot <- bind_rows(fad_table, substrate_table, sam_table)
+
+muttable <- tibble(mutation = mutations) %>%
+   mutate(pos = as.integer(str_extract(mutation, "\\d+"))) 
+
+wide_tidy %>%
+  #head %>%
+  mutate(pos = as.integer(str_extract(mutation, "\\d+"))) %>%
+  group_by(pos) %>%
+     summarize(totscore = sum(score)) %>%
+  ungroup %>% 
+  arrange(totscore) %>%
+  left_join(muttable) %>%
+  left_join(annot)
+
+mave <- read_csv("/home/vc8200/transformer_infrastructure/urn_mavedb_00000049-a-2_scores.csv", skip = 4) %>%  mutate(mutation = str_replace_all(hgvs_pro, c('Ala'
+='A', 'Arg'='R', 'Asn'='N', 'Asp'='D', 'Cys'='C', 'Glu'='E', 'Gln'='Q', 'Gly'='G', 'His'='H', 'Ile'='I', 'Leu'='L', 'Lys'='K', 'Met'='M', 'Phe'='F', 'Pro
+'='P', 'Ser'='S', 'Thr'='T', 'Trp'='W', 'Tyr'='Y', 'Val'='V'))) %>% 
+  mutate(mutation = str_replace(mutation, "p.", "")) %>%
+  select(mutation, score) %>%
+    mutate(pos = as.integer(str_extract(mutation, "\\d+"))) 
+
+
+
+muttable <- muttable %>%
+    mutate(hasmutation = TRUE)
+
+
+
+tidy_annot <- wide_tidy %>%
+  #head %>%
+  mutate(pos = as.integer(str_extract(mutation, "\\d+"))) %>%
+  group_by(mutation, pos) %>%
+     summarize(totscore = sum(score)) %>%
+  ungroup %>% 
+  arrange(totscore) %>%
+  left_join(muttable) %>%
+  left_join(annot) %>%
+  left_join(mave) %>%
+  left_join(dmask, by = "pos") %>%
+  left_join(mave_paper_annot, by = c("pos", "mutation")) %>%
+  mutate(fol_response = as.numeric(fol_response)) %>%
+    mutate(base_response = as.numeric(base_response)) 
+
+
+tidy_annot %>%
+  ggplot(aes(x = totscore, y = demask_score, label = mutation )) +
+  geom_point(alpha = 0.1 )
+
+tidy_annot %>%
+  ggplot(aes(x = totscore, y = entropy, label = mutation, color = as.factor(pos))) +
+  geom_point(alpha = 0.01 ) +
+  theme(legend.position = "none")
+
+View(tidy_annot)
+
+tidy_annot %>%
+  ggplot(aes(x = totscore, y = score, label = mutation )) +
+  geom_point( ) + 
+  facet_wrap(~desc)
+
+tidy_annot %>%
+  ggplot(aes(x = totscore, y = score, label = mutation )) +
+  geom_point( ) + 
+  facet_wrap(~hasmutation)
+
+tidy_annot <- wide_tidy %>%
+  #head %>%
+  mutate(pos = as.integer(str_extract(mutation, "\\d+"))) %>%
+  group_by(pos) %>%
+     summarize(totscore = sum(score)) %>%
+  ungroup %>% 
+  arrange(totscore) %>%
+  #left_join(muttable) %>%
+  left_join(annot) %>%
+  left_join(mave) 
+tidy_annot %>%
+  ggplot(aes(x = totscore, y = score, label = mutation, color = as.factor(pos) )) +
+  geom_point( ) + 
+  facet_wrap(~desc) +
+  theme(legend.position = "none")
+
+
+
+```
+
+
+```{r}
+
+
+pos_zscores_bfd %>%
+  group_by(pos) %>%
+     summarize(min_z = min(pos_z)) %>%
+  ungroup %>%
+  left_join(uniprot_disease) %>%
+ #filter(pos_z <= -11) %>% 
+  #as_tbl_graph() %>%
+  #activate(nodes) %>%
+  #  mutate(deg = centrality_degree()) %>%
+  #as_tibble() %>%
+  left_join(dmask_group, by = c("pos") ) %>%
+  ggplot(aes(label = pos, x = min_z, y = maxeffect, color = disease)) + 
+  geom_point(alpha = 0.3)
+
+
+pos_zscores_bfd %>%  left_join(uniprot_disease) %>%
+  ggplot(aes(x = pos_z, color = disease)) + geom_density() 
+
+
+
+pos_zscores_t5 %>%  ungroup %>%
+  group_by(pos) %>%
+    summarize(min_z = min(pos_z, na.rm = TRUE)) %>%
+  ungroup() %>%
+  View()
+  left_join(annot_tbl, by = c("pos"= "name")) %>%
+  ggplot(aes(x = min_z, color = effect)) + 
+  geom_histogram() +
+  facet_wrap(~effect, scales= "free_y", ncol = 1)
+
+  
+pos_zscores_bfd %>%
+ #filter(pos_z <= -11) %>% 
+  as_tbl_graph() %>%
+  activate(nodes) %>%
+    mutate(deg = centrality_degree()) %>%
+  as_tibble() %>%
+  left_join(dmask_group, by = c("name"= "pos") ) %>%
+  ggplot(aes(label = name, x = deg, y = maxeffect)) + 
+  geom_point(alpha = 0.3)
+  
+  
+pos_zscores_bfd_deg <-   pos_zscores_bfd %>%
+  filter(pos_z <= -10)  %>%
+  as_tbl_graph() %>%
+  activate(nodes) %>%
+    mutate(deg = centrality_degree()) %>%
+  as_tibble() %>%
+  rename(pos = name)
+  
+```
