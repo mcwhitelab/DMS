@@ -10,17 +10,17 @@ import numpy as np
 from torch.multiprocessing import Pool
 from Bio import SeqIO
 import copy
-from transformer_infrastructure.hf_embed import load_model
+from mcwlab_utils.hf_embed import load_model
 #from transformers import AutoConfig
 
-import line_profiler
-profile = line_profiler.LineProfiler()
-import atexit
-atexit.register(profile.print_stats)
+# import line_profiler
+# profile = line_profiler.LineProfiler()
+# import atexit
+# atexit.register(profile.print_stats)
 #from numba import jit
 #import numba as nb
 
-@profile
+# @profile
 def get_attn_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-f", "--fasta", dest = "fasta_path", type = str, required = True,
@@ -51,7 +51,7 @@ def get_attn_args():
 #    return(G)  
 
 
-@profile
+# @profile
 def attndf_to_graphlist(df):
     '''
     Parameters
@@ -90,7 +90,7 @@ def attndf_to_graphlist(df):
     #print(end - start)
     return G_dict
 
-@profile
+# @profile
 def compare_attn_networks(g1list, g2list, summary = True):
     '''
     Parameters
@@ -99,7 +99,7 @@ def compare_attn_networks(g1list, g2list, summary = True):
     g2list : Graph list of the mutated sequence.
     Returns
     -------
-    outlist : List of the values nodes1, nodes2, edges1, edges2, distinct_edges1, distinct_edges2, edge_weight1, edge_weight2.
+    outdict : Dictionary of the values nodes1, nodes2, edges1, edges2, distinct_edges1, distinct_edges2, edge_weight1, edge_weight2.
     '''
     outdict = {}
     dict_combo =dict(g1list, **g2list)
@@ -135,7 +135,7 @@ def compare_attn_networks(g1list, g2list, summary = True):
         
 
         if summary == False:
-            outlist.append([nodes1, nodes2, edges1, edges2, distinct_edges1, distinct_edges2, distinct_weight_g1, distinct_weight_g2, total_weight_g1, total_weight_g2])
+            outdict.append([nodes1, nodes2, edges1, edges2, distinct_edges1, distinct_edges2, distinct_weight_g1, distinct_weight_g2, total_weight_g1, total_weight_g2])
         else:
 
             if edges1 +  edges2 ==0:
@@ -147,7 +147,7 @@ def compare_attn_networks(g1list, g2list, summary = True):
             outdict[layer_head] = score
     return outdict
 
-@profile
+# @profile
 def parse_mut(mut):
     old = None
     if mut[0].isalpha():
@@ -162,7 +162,7 @@ def parse_mut(mut):
  
     return(old,  new, pos)
 
-@profile
+# @profile
 def format_tokens(tokens, mut = None):
     # mutation pos is indexed from 1
     #print("tokens at format tokens", tokens)
@@ -177,7 +177,7 @@ def format_tokens(tokens, mut = None):
        tokens[pos - 1] = new # Replace with new position
     return(tokens)
 
-@profile
+# @profile
 def get_attn_data(model, tokenizer, tokens, model_type, min_attn = 0.1, start_index=0, end_index=None, max_seq_len=1024):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     #print("tokens", tokens)
@@ -218,7 +218,7 @@ def get_attn_data(model, tokenizer, tokens, model_type, min_attn = 0.1, start_in
 #    model = AutoModel.from_pretrained(model_path, output_attentions=True)
 #    return(model, tokenizer)
 
-@profile
+# @profile
 def get_attn_df(model, tokenizer, tokens, model_type, min_attn = 0.1, mut = None):
 
     tokens = format_tokens(tokens, mut)
@@ -236,7 +236,7 @@ def get_attn_df(model, tokenizer, tokens, model_type, min_attn = 0.1, mut = None
     df = pd.DataFrame(list(zip(layers_list, heads_list, res1_list, res2_list, attns_list)), columns=['layer','head','res1','res2','attention'])
     return(df)
 
-@profile
+# @profile
 def wrap_attns(attns, tokens, min_attn):
    '''
    Get indices where attn above min_attn
@@ -256,7 +256,7 @@ def wrap_attns(attns, tokens, min_attn):
    return(layers, heads, aa1s, pos1s, aa2s, pos2s, attns_sel) 
 
 
-@profile
+# @profile
 def get_score_dict(mutation, tokens, model, tokenizer, model_type, glist_wt, min_attn):
                 print(mutation) 
                 tokens_for_mut = copy.deepcopy(tokens) # Necessary 
