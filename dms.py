@@ -99,9 +99,11 @@ def compare_attn_networks(g1list, g2list, summary = True):
     g2list : Graph list of the mutated sequence.
     Returns
     -------
-    outdict : Dictionary of the values nodes1, nodes2, edges1, edges2, distinct_edges1, distinct_edges2, edge_weight1, edge_weight2.
+    outdict : List of the values nodes1, nodes2, edges1, edges2, distinct_edges1, distinct_edges2, edge_weight1, edge_weight2.
     '''
     outdict = {}
+    print("G1list:", g1list)
+    print("G2list:", g2list)
     dict_combo =dict(g1list, **g2list)
     for layer_head in dict_combo.keys():   #zip(g1list, g2list):
         if layer_head not in g1list.keys():
@@ -200,6 +202,9 @@ def get_attn_data(model, tokenizer, tokens, model_type, min_attn = 0.1, start_in
     if model_type == "t5":
         # T5 models don't have the classifier <CLS> token
         attns = [attn[:, :, :-1, :-1] for attn in attns]
+    if model_type == "esm":
+        # ESM models do have a <CLS> token, but not a <SEP> token
+        attns = [attn[:, :, 1:, 1:] for attn in attns]
 
     attns = torch.stack([attn.squeeze(0) for attn in attns])#.cpu()
    
@@ -270,6 +275,19 @@ def get_score_dict(mutation, tokens, model, tokenizer, model_type, glist_wt, min
                 score_dict['mutation']  = mutation    
                 return(score_dict)
 
+
+def generate_mutlist(mutation = None, mutationsfile = None):
+    mutlist = []
+    if mutationsfile is not None:
+         with open(mutationsfile, "r") as m:
+            raw_muts = m.readlines()
+         muts = [x.replace("\n", "") for x in raw_muts]
+         mutlist = mutlist + muts
+    if mutation is not None:
+        mutlist = mutlist + [mutation]  # Always do wild-type first
+    return mutlist
+
+
 if __name__ == "__main__":
     torch.multiprocessing.set_start_method('spawn')# good solution !!!!
     args = get_attn_args()
@@ -292,15 +310,8 @@ if __name__ == "__main__":
     model.eval()
     # Allow parallel
     model.share_memory()
-    mutlist = []
-    if mutfile is not None:
-         with open(mutfile, "r") as m:
-            raw_muts = m.readlines()
-         muts = [x.replace("\n", "") for x in raw_muts]
-         mutlist = mutlist + muts
-    if mut is not None:
-        mutlist = mutlist + [mut]  # Always do wild-type first
-    print(mutlist)
+    # mutlist = generate_mutlist(mut, mutfile)
+    # print(mutlist)
 
 
     
