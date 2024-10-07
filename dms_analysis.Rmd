@@ -52,9 +52,6 @@ theme_set(theme_cowplot())
 
 
 
-
-
-
 ```{r}
 read_csv_dms <- function(filename){
   
@@ -63,16 +60,29 @@ read_csv_dms <- function(filename){
   return(df)
 }
 
+add_pos_offset <- function(position, offset=0){
+  if(offset==0){
+    return(position)
+  }
+  index = ifelse( #extract numeric position in string from aa single letter
+    grepl("[0-9]", substr(position, 1, 1)), 1, 2
+  )
+  #add numeric offset to numeric position
+  out <- offset + as.numeric(substr(position, index, nchar(position)))
+  #return with single-letter code, if supplied
+  return(ifelse(index==1, out, paste(substr(position, 1, 1), out, sep="")))
+}
 
 ```
 
 
 
 ```{r}
-directory <- "/scratch/gpfs/cmcwhite/preds_alphafold/interaction_exp/fastas/"
-filelist <- c("5ht1b_50U_gnao.fasta.attn_compare.bfd.gpu.csv","5ht1b.fasta.attn_compare.t5.gpu.csv",
-"myc_50U_max.fasta.attn_compare.t5.gpu.csv",  "myc.fasta.attn_compare.t5.gpu.csv", "5ht1b.fasta.attn_compare.bfd.gpu.csv","myc_50U_max.fasta.attn_compare.bfd.gpu.csv", "myc.fasta.attn_compare.bfd.gpu.csv")
+#Load list of files from directory. TODO make this not hardcoded
+directory <- "/groups/clairemcwhite/samdlove_workspace/fastas/"
+filelist <- c("uba1-domain-hhr23-residues155-204.fasta.prot_t5_xl_uniref50.csv")
 
+# Load csv's and adds mutation and model information
 dms_int <- map_dfr(filelist, ~read_csv_dms(paste0(directory, .)), .id = "segment") %>%
   #select(-proteinID) %>%
   #mutate(model= "t5") %>%
@@ -84,11 +94,9 @@ dms_int <- map_dfr(filelist, ~read_csv_dms(paste0(directory, .)), .id = "segment
 
 dms_int  %>% select(proteinID, model) %>% unique
 
-  
-dms_preprocess_int<- dms_int %>%
-
-  
- pivot_longer(-c(mutation, model, proteinID), names_to = "head", values_to = "value") %>%
+#Converts to long data, means and sds by head
+dms_preprocess_int <- dms_int %>%
+pivot_longer(-c(mutation, model, proteinID), names_to = "head", values_to = "value") %>%
 
   group_by(head, model, proteinID) %>%
      mutate(meanval = mean(value), sd = sd(value)) %>%
@@ -98,24 +106,42 @@ dms_preprocess_int<- dms_int %>%
   arrange(zscore)
 
 
-dms_preprocess_int %>% 
-  mutate(pos = str_extract(mutation, "\\d+"))
+# dms_preprocess_int %>% 
+#   mutate(pos = str_extract(mutation, "\\d+"))
 
-
+# Final output
+offset <- 154
  pos_zscores_int <- dms_preprocess_int%>%
-    mutate(pos = str_extract(mutation, "\\d+")) %>%
+    mutate(pos = add_pos_offset(str_extract(mutation, "[A-Z]\\d+"), offset)) %>%
   group_by(pos, head, model, proteinID) %>%
-     summarize(pos_z= mean(zscore)) %>%
+     summarize(pos_z= mean(zscore)) %>% #try minimum/max abs
   ungroup %>%
-  arrange(pos_z) %>%
-   mutate(refprot = str_extract(proteinID, "^[^_]+"))
+  arrange(pos_z) #%>%
+   # mutate(refprot = str_extract(proteinID, "^[^_]+"))
 
 
-
-pos_zscores_int  %>% filter(refprot == "myc") %>% filter(model == "bfd") %>% 
-  group_by(head, pos, model, refprot) %>%
-  pivot_wider(values_from = "pos_z", names_from = "proteinID") 
+ sig_zscores_int <- pos_zscores_int%>%
+  filter(pos_z <= -5) %>%
+  
+  # group_by(head, model, proteinID) %>%
+  #    mutate(n = n()) %>%
+  # ungroup %>% 
+ # filter(n > 1) %>%
+  mutate(abs_z = -pos_z) %>%
+  as_tbl_graph() %>%
+  activate(nodes) %>%
+     mutate(is_head = case_when(grepl("-", name) ~ TRUE,
+                                 TRUE ~ FALSE)
+           ) %>%
+      mutate(label = case_when(is_head == TRUE ~ "",
+                               is_head == FALSE ~ name))
  
+ sig_zscores_int %>%
+ ggraph("fr") +
+    geom_edge_link(alpha = 1, aes(color = pos_z)) +
+  geom_node_text(aes(label = label))+    #, size = -maxeffect)) + #, size = -max_entropy))  +
+  scale_edge_color_gradient(low= "yellow", high = "blue") +
+  facet_wrap(model ~ proteinID)
 ```
 
 
