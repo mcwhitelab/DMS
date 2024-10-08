@@ -65,13 +65,14 @@ def attndf_to_graphlist(df):
     '''    
     #print(df)
     df['name'] = df['layer'].astype(str).str.cat(df['head'].astype(str), sep='-')
+    #print(df)
 
     #df['name'] = df.apply(lambda row: "{}-{}".format(row.layer, row.head), axis=1)
     
 
-    df_grouped = df.groupby(['name'])
+    df_grouped = df.groupby('name')
     #group_keys = list(df_grouped.groups.keys()) 
-    df_filtered = df_grouped[['res1', 'res2', 'attention']]
+    #df_filtered = df_grouped[['res1', 'res2', 'attention']]
     G_dict = {}    
 
     #start = time()
@@ -80,8 +81,11 @@ def attndf_to_graphlist(df):
     #end = time()
     #print(end-start)
     #start = time()
-    for name, tbl in df_filtered:
+    #print(df_filtered)
+    for name, group in df_grouped:
+        tbl = group[['res1', 'res2', 'attention']]
         ungrouped = tbl.reset_index()
+        #print(name)
         #print(ungrouped)
         G = Graph.DataFrame(ungrouped[['res1', 'res2']], use_vids=False)
         G.es["weight"] = ungrouped['attention']#.tolist()
